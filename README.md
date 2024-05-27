@@ -4,7 +4,7 @@
 
 This repository presents code implementing Similarity-based Random Partition, as proposed by the following paper:
 
-**Wakayama, T., Sugasawa, S. and Kobayashi, G. (2023). [Similarity-based Random Partition Distribution for Clustering Functional Data](https://arxiv.org/abs/2308.01704)**
+**Wakayama, T., Sugasawa, S. and Kobayashi, G. (2023). [Similarity-based Random Partition Distribution for Clustering Functional Data](https://arxiv.org/abs/2308.01704)**.
 
 ## Prerequisites 📋
 
