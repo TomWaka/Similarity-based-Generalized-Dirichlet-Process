@@ -151,7 +151,6 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
 
     # MCMCサンプリング
     for iter in 1:n_iter
-        print(K[1])
 
         # θのサンプリング
         for ℓ in 1:M
