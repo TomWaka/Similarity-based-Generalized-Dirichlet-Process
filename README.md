@@ -1,6 +1,6 @@
 # Similarity-based Random Partition Distribution for Clustering Functional Data
 
-## Overview 📄
+## Overview 📝
 
 This repository presents code implementing Similarity-based Random Partition, as proposed by the following paper:
 
