@@ -1,8 +1,5 @@
 using Distributions, LinearAlgebra, Random, SpecialFunctions, StatsPlots, Distances
 
-include("functions.jl")
-using .functions
-
 # Data settings
 const N_REGIONS = 40  # Number of regions
 const N_DAYS = 15  # Number of days
@@ -18,6 +15,7 @@ w = ones(N_DAYS, N_PERIODS)
 
 X = reshape(1:P_POINTS, 1, P_POINTS)
 true_θ = [rand(MvNormal(zeros(P_POINTS), gaussian_process_cov(X, 2, 5))) for _ in 1:TRUE_CLUSTERS]
+#true_θ = [rand(MvNormal(zeros(P_POINTS), gaussian_process_cov_exp(X, 2, 5))) for _ in 1:TRUE_CLUSTERS]
 
 y = zeros(N_REGIONS, N_DAYS, P_POINTS)
 for i in 1:N_REGIONS
@@ -53,7 +51,7 @@ hyperparams = (
 const N_ITER = 20000
 
 # Running SGDP clustering
-α_trace, β_trace, K_trace, z_trace, θ_trace = sgdp_clustering(
+α_trace, β_trace, K_trace, z_trace, θ_trace, sigma_trace  = sgdp_clustering(
     y, adj, X, N_PERIODS, w, hyperparams.m_m, hyperparams.C_m,
     hyperparams.a_η, hyperparams.b_η, hyperparams.a_α, hyperparams.b_α,
     hyperparams.a_β, hyperparams.b_β, hyperparams.a_τ, hyperparams.b_τ,

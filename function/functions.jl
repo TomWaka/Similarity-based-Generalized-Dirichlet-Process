@@ -2,11 +2,17 @@ module functions
 
 using Distributions, LinearAlgebra, Random, SpecialFunctions, StatsPlots, Distances
 
-export gaussian_process_cov, sgdp_clustering
+export gaussian_process_cov, sgdp_clustering, gaussian_process_cov_exp
 
 function gaussian_process_cov(X, η, ϕ)
     pdist(x) = pairwise(Euclidean(), x)
     K = η^2 * exp.(-pdist(X).^2 ./ (2 * ϕ^2))
+    return K + 1e-6 * Matrix{eltype(K)}(I, size(K)...)
+end
+
+function gaussian_process_cov_exp(X, η, ϕ)
+    pdist(x) = pairwise(Euclidean(), x)
+    K = η^2 * exp.(-pdist(X) ./ (2*ϕ))
     return K + 1e-6 * Matrix{eltype(K)}(I, size(K)...)
 end
 
@@ -21,6 +27,24 @@ function sgdp_similarity_weight(i, j, z, τ, adj)
         return τ
     else
         return sum(adj[i, idx] + τ .* (1 .-adj[i, idx])) / sum(adj[i, 1:n-1] .+ τ .* (1 .- adj[i, 1:n-1]))
+    end
+end
+
+function sgdp_similarity_weight(i, j, z, τ, adj)
+    n = length(z) 
+    indices = findall(x -> x == j, z)
+    if isempty(indices)
+        return τ
+    else
+        # 全体の類似度行列 adj はフルサイズ（例えば n_full x n_full）のものを渡すので、
+        # 行 i の、前に割り当てられたインデックス（1:n）に対応する部分を抽出する
+        # ここでは、z に対応する部分は、adj[i, 1:n] とする
+        similarities_prev = [adj[i, k] for k in 1:n]
+        # indices で指定されたクラスタ j に属する部分の類似度
+        similarities_j = [adj[i, k] for k in indices]
+        denom = sum([sim + τ * (1 - sim) for sim in similarities_prev])
+        numer = sum([sim + τ * (1 - sim) for sim in similarities_j])
+        return numer / denom
     end
 end
 
@@ -120,6 +144,23 @@ function sample_ϕ2(ϕ, ϕ_new, a_ϕ, b_ϕ, θ, m, η, X)
     end
 end
 
+function sgdp_joint_log_prob_ordered(z_order::Vector{Int}, α, β, τ, adj_order)
+    n = length(z_order)
+    log_prob = 0.0
+    # 1 番目の割当は初期値として確率 1 とする
+    for t in 2:n
+        # 条件付き確率を計算するため、t-1 個の既割当を用いる
+        # sgdp_conditional_prob を使うために、一時的な vector を作成
+        z_prev = z_order[1:t-1]
+        # 現在の割当
+        j_current = z_order[t]
+        # 条件付き確率の計算（sgdp_conditional_prob は t を n とみなす）
+        p_val = sgdp_conditional_prob(t, j_current, z_prev, α, β, τ, adj_order[1:t-1, 1:t-1])
+        log_prob += log(p_val)
+    end
+    return log_prob
+end
+
 function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_α=1.0, a_β=10.0, b_β=1.0, a_τ=0.5, b_τ=0.5, a_ϕ=0.5, b_ϕ=0.5, n_iter=20000)
 
     N, T, p = size(y)
@@ -136,6 +177,7 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
     ϕ_y = 2.0
     η_θ = ones(M) * 1.0
     ϕ_θ = ones(M) * 1.0
+    sigma = collect(1:N)          
 
     # パラメータのトレースを保存する配列
     α_trace = zeros(n_iter÷5, M)
@@ -146,11 +188,14 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
     ϕ_y_trace = zeros(n_iter÷5)
     ϕ_θ_trace = zeros(n_iter÷5, M)
     z_trace = zeros(Int, n_iter÷5, N, M)
+    sigma_trace = zeros(Int, n_iter ÷ 5, N)  
     K_trace = zeros(Int, n_iter÷5, M)
     θ_trace = []
+    
 
     # MCMCサンプリング
     for iter in 1:n_iter
+        println(iter)
 
         # θのサンプリング
         for ℓ in 1:M
@@ -262,7 +307,7 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
         end
 
         # zのサンプリング
-        for i in 1:N
+        for i in sigma
             for ℓ in 1:M
                 prob = zeros(K[ℓ] + 1)
                 yy = y[i, w[:, ℓ].==1, :]
@@ -277,15 +322,8 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
                 prob .+= 1e-30
                 prob[1:K[ℓ]] = prob[1:K[ℓ]] ./ sum(prob[1:K[ℓ]]) .* (1-prob[K[ℓ]+1])
 
-                # for j in 1:K[ℓ]
-                #     for t in 1:T
-                #         prob[j] *= pdf(MvNormal(θ[ℓ][j, :], gaussian_process_cov(X, η_y, ϕ_y)), vec(yy[t, :]))
-                #     end
-                #     #prob[j] *= pdf(MvNormal(θ[ℓ][j, :], gaussian_process_cov(X, η_y, ϕ_y)), vec(mean(yy, dims=1)))
-                # end
                 Σ_y = gaussian_process_cov(X, η_y, ϕ_y)
                 for t in 1:T
-                    # print(prob)
                     yy_t = view(yy, t, :)
                     for j in 1:K[ℓ]
                         prob[j] *= pdf(MvNormal(θ[ℓ][j, :], Σ_y), yy_t)
@@ -293,10 +331,15 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
                     prob[K[ℓ]+1] *= pdf(MvNormal(m_θ[ℓ], gaussian_process_cov(X, η_y, ϕ_y) + gaussian_process_cov(X, η_θ[ℓ], ϕ_θ[ℓ])), yy_t)
                     prob ./= sum(prob)
                 end
+                if any(prob .< 0)
+                    prob[prob .< 0] .= 0
+                    prob ./= sum(prob)
+                end
                 if any(isnan, prob)
                     prob .= 1
                     prob ./= sum(prob)
                 end 
+
                 z[i, ℓ] = rand(Categorical(prob))
                 if z[i, ℓ] == K[ℓ] + 1
                     K[ℓ] += 1
@@ -326,6 +369,27 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
         end
         θ = nth
 
+        # --- 順列 σ の更新（Metropolis–Hastings ステップ） ---
+        # σ の提案：ランダムに 2 つの位置をスワップ
+        sigma_new = copy(sigma)
+        i1, i2 = rand(1:N, 2)
+        sigma_new[i1], sigma_new[i2] = sigma_new[i2], sigma_new[i1]
+
+        # 順序付きに再配置したクラスタ割当を得る（ここでは M=1 の場合の例）
+        z_order_current = z[sigma, 1]
+        z_order_new = z[sigma_new, 1]
+        # 同様に、隣接行列も σ に沿って並べ替える
+        adj_order_current = adj[sigma, sigma]
+        adj_order_new = adj[sigma_new, sigma_new]
+
+        # 順序付きの joint log probability を計算（以下の関数を定義しておく）
+        log_prob_current = sgdp_joint_log_prob_ordered(z_order_current, α[1], β[1], τ[1], adj_order_current)
+        log_prob_new = sgdp_joint_log_prob_ordered(z_order_new, α[1], β[1], τ[1], adj_order_new)
+
+        if log(rand()) < (log_prob_new - log_prob_current)
+            sigma = sigma_new   # 提案を受容
+        end
+
         # パラメータの値を保存
         if iter > n_iter/5*4
             i = div(iter - div(n_iter, 5) * 4, 1)
@@ -338,11 +402,12 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
             ϕ_θ_trace[i, :] = ϕ_θ
             z_trace[i, :, :] = z
             K_trace[i, :] = K
+            sigma_trace[i, :] = sigma
             push!(θ_trace, deepcopy(θ))
         end
     end
 
-    return α_trace, β_trace, K_trace, z_trace, θ_trace
+    return α_trace, β_trace, K_trace, z_trace, θ_trace, sigma_trace
 end
 
 end
