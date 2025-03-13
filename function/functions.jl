@@ -22,16 +22,6 @@ end
 
 function sgdp_similarity_weight(i, j, z, τ, adj)
     n = length(z) 
-    idx = findall(x -> x < n, 1:length(z))[z[1:n-1] .== j]
-    if isempty(idx)
-        return τ
-    else
-        return sum(adj[i, idx] + τ .* (1 .-adj[i, idx])) / sum(adj[i, 1:n-1] .+ τ .* (1 .- adj[i, 1:n-1]))
-    end
-end
-
-function sgdp_similarity_weight(i, j, z, τ, adj)
-    n = length(z) 
     indices = findall(x -> x == j, z)
     if isempty(indices)
         return τ
@@ -144,18 +134,51 @@ function sample_ϕ2(ϕ, ϕ_new, a_ϕ, b_ϕ, θ, m, η, X)
     end
 end
 
-function sgdp_joint_log_prob_ordered(z_order::Vector{Int}, α, β, τ, adj_order)
+function sgdp_similarity_weight_ordered(sim_row::Vector{Float64}, z::Vector{Int}, j::Int, τ)
+    n = length(z)
+    indices = findall(x -> x == j, z)
+    if isempty(indices)
+        return τ
+    else
+        similarities_prev = sim_row  # 既に新観測と前の t–1 個の類似度が入っている
+        similarities_j = sim_row[indices]
+        denom = sum([sim + τ * (1 - sim) for sim in similarities_prev])
+        numer = sum([sim + τ * (1 - sim) for sim in similarities_j])
+        return numer / denom
+    end
+end
+
+function sgdp_conditional_prob_ordered(i, j, z::Vector{Int}, α, β, τ, sim_row::Vector{Float64})
+    # ここで i は t 番目の観測番号（順序上の番号 t）ですが、実際の値は使わない
+    n = length(z)
+    k = maximum(z)
+    if j <= k
+        N_j = count(x -> x == j, z)
+        ω_j = sgdp_similarity_weight_ordered(sim_row, z, j, τ)
+        p = (α * β + N_j - 1) / (α + n - 1) * ω_j
+        for ℓ in 1:(j-1)
+            p *= (α * (1 - β) + sum(x -> x > ℓ, z)) / (α + sum(x -> x > ℓ, z) - 1)
+        end
+        return p < 1e-100 ? 1e-100 - p : p
+    else
+        p = (α * (1 - β)) / (α + n - 2)
+        for ℓ in 1:k-1
+            p *= (α * (1 - β) + sum(x -> x > ℓ, z)) / (α + sum(x -> x > ℓ, z) - 1)
+        end
+        return p
+    end
+end
+
+function sgdp_joint_log_prob_ordered(z_order::Vector{Int}, α, β, τ, adj_order::Matrix{Float64})
     n = length(z_order)
     log_prob = 0.0
-    # 1 番目の割当は初期値として確率 1 とする
+    # 最初の観測は初期割当として確率 1 とする
     for t in 2:n
-        # 条件付き確率を計算するため、t-1 個の既割当を用いる
-        # sgdp_conditional_prob を使うために、一時的な vector を作成
         z_prev = z_order[1:t-1]
-        # 現在の割当
         j_current = z_order[t]
-        # 条件付き確率の計算（sgdp_conditional_prob は t を n とみなす）
-        p_val = sgdp_conditional_prob(t, j_current, z_prev, α, β, τ, adj_order[1:t-1, 1:t-1])
+        # 新観測 t の類似度は、adj_order の t 行目から、1:t-1 列を取り出す
+        sim_row = adj_order[t, 1:t-1]
+        p_val = sgdp_conditional_prob_ordered(t, j_current, z_prev, α, β, τ, sim_row)
         log_prob += log(p_val)
     end
     return log_prob
@@ -195,7 +218,6 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
 
     # MCMCサンプリング
     for iter in 1:n_iter
-        println(iter)
 
         # θのサンプリング
         for ℓ in 1:M
@@ -369,25 +391,18 @@ function sgdp_clustering(y, adj, X, M, w, m_m, C_m, a_η=1, b_η=1, a_α=5.0, b_
         end
         θ = nth
 
-        # --- 順列 σ の更新（Metropolis–Hastings ステップ） ---
-        # σ の提案：ランダムに 2 つの位置をスワップ
         sigma_new = copy(sigma)
-        i1, i2 = rand(1:N, 2)
+        i1, i2= rand(1:N, 2)
         sigma_new[i1], sigma_new[i2] = sigma_new[i2], sigma_new[i1]
-
-        # 順序付きに再配置したクラスタ割当を得る（ここでは M=1 の場合の例）
         z_order_current = z[sigma, 1]
         z_order_new = z[sigma_new, 1]
-        # 同様に、隣接行列も σ に沿って並べ替える
         adj_order_current = adj[sigma, sigma]
         adj_order_new = adj[sigma_new, sigma_new]
-
-        # 順序付きの joint log probability を計算（以下の関数を定義しておく）
         log_prob_current = sgdp_joint_log_prob_ordered(z_order_current, α[1], β[1], τ[1], adj_order_current)
         log_prob_new = sgdp_joint_log_prob_ordered(z_order_new, α[1], β[1], τ[1], adj_order_new)
 
         if log(rand()) < (log_prob_new - log_prob_current)
-            sigma = sigma_new   # 提案を受容
+            sigma = sigma_new
         end
 
         # パラメータの値を保存
